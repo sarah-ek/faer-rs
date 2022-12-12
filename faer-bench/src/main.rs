@@ -111,7 +111,22 @@ fn eigen(
 }
 
 fn main() -> Result<()> {
-    let input_sizes = vec![32, 64, 96, 128, 192, 256, 384, 512, 640, 768, 896, 1024];
+    let cores = affinity::get_core_num();
+    static TID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(cores)
+        .spawn_handler(|thread| {
+            std::thread::spawn(|| {
+                let id = TID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                affinity::set_thread_affinity(&[id]).unwrap();
+                thread.run();
+            });
+            Ok(())
+        })
+        .build()?;
+
+    let input_sizes = vec![1024];
 
     println!(
         "
@@ -123,8 +138,8 @@ Multiplication of two square matrices of dimension `n`.
     );
     print_results(
         &input_sizes,
-        &gemm::faer(&input_sizes, Parallelism::None),
-        &gemm::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| gemm::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| gemm::faer(&input_sizes, Parallelism::Rayon(0))),
         &gemm::ndarray(&input_sizes),
         &gemm::nalgebra(&input_sizes),
         &eigen(eigen::gemm, &input_sizes),
@@ -139,8 +154,8 @@ Solving `AX = B` in place where `A` and `B` are two square matrices of dimension
 ```");
     print_results(
         &input_sizes,
-        &trsm::faer(&input_sizes, Parallelism::None),
-        &trsm::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| trsm::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| trsm::faer(&input_sizes, Parallelism::Rayon(0))),
         &trsm::ndarray(&input_sizes),
         &trsm::nalgebra(&input_sizes),
         &eigen(eigen::trsm, &input_sizes),
@@ -157,8 +172,8 @@ Computing `A^-1` where `A` is a square triangular matrix with dimension `n`.
     );
     print_results(
         &input_sizes,
-        &tr_inverse::faer(&input_sizes, Parallelism::None),
-        &tr_inverse::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| tr_inverse::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| tr_inverse::faer(&input_sizes, Parallelism::Rayon(0))),
         &tr_inverse::ndarray(&input_sizes),
         &tr_inverse::nalgebra(&input_sizes),
         &eigen(eigen::trinv, &input_sizes),
@@ -175,8 +190,8 @@ Factorizing a square matrix with dimension `n` as `L×L.T`, where `L` is lower t
     );
     print_results(
         &input_sizes,
-        &cholesky::faer(&input_sizes, Parallelism::None),
-        &cholesky::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| cholesky::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| cholesky::faer(&input_sizes, Parallelism::Rayon(0))),
         &cholesky::ndarray(&input_sizes),
         &cholesky::nalgebra(&input_sizes),
         &eigen(eigen::chol, &input_sizes),
@@ -191,8 +206,8 @@ Factorizing a square matrix with dimension `n` as `P×L×U`, where `P` is a perm
 ```");
     print_results(
         &input_sizes,
-        &partial_piv_lu::faer(&input_sizes, Parallelism::None),
-        &partial_piv_lu::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| partial_piv_lu::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| partial_piv_lu::faer(&input_sizes, Parallelism::Rayon(0))),
         &partial_piv_lu::ndarray(&input_sizes),
         &partial_piv_lu::nalgebra(&input_sizes),
         &eigen(eigen::plu, &input_sizes),
@@ -207,8 +222,8 @@ Factorizing a square matrix with dimension `n` as `P×L×U×Q.T`, where `P` and 
 ```");
     print_results(
         &input_sizes,
-        &full_piv_lu::faer(&input_sizes, Parallelism::None),
-        &full_piv_lu::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| full_piv_lu::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| full_piv_lu::faer(&input_sizes, Parallelism::Rayon(0))),
         &full_piv_lu::ndarray(&input_sizes),
         &full_piv_lu::nalgebra(&input_sizes),
         &eigen(eigen::flu, &input_sizes),
@@ -223,8 +238,8 @@ Factorizing a square matrix with dimension `n` as `QR`, where `Q` is unitary and
 ```");
     print_results(
         &input_sizes,
-        &no_piv_qr::faer(&input_sizes, Parallelism::None),
-        &no_piv_qr::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| no_piv_qr::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| no_piv_qr::faer(&input_sizes, Parallelism::Rayon(0))),
         &no_piv_qr::ndarray(&input_sizes),
         &no_piv_qr::nalgebra(&input_sizes),
         &eigen(eigen::qr, &input_sizes),
@@ -239,8 +254,8 @@ Factorizing a square matrix with dimension `n` as `QRP`, where `P` is a permutat
 ```");
     print_results(
         &input_sizes,
-        &col_piv_qr::faer(&input_sizes, Parallelism::None),
-        &col_piv_qr::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| col_piv_qr::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| col_piv_qr::faer(&input_sizes, Parallelism::Rayon(0))),
         &col_piv_qr::ndarray(&input_sizes),
         &col_piv_qr::nalgebra(&input_sizes),
         &eigen(eigen::colqr, &input_sizes),
@@ -257,8 +272,8 @@ Computing the inverse of a square matrix with dimension `n`.
     );
     print_results(
         &input_sizes,
-        &inverse::faer(&input_sizes, Parallelism::None),
-        &inverse::faer(&input_sizes, Parallelism::Rayon(0)),
+        &pool.install(|| inverse::faer(&input_sizes, Parallelism::None)),
+        &pool.install(|| inverse::faer(&input_sizes, Parallelism::Rayon(0))),
         &inverse::ndarray(&input_sizes),
         &inverse::nalgebra(&input_sizes),
         &eigen(eigen::inverse, &input_sizes),

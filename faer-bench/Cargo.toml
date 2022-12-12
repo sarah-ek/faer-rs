@@ -21,6 +21,8 @@ rand = "0.8.5"
 dyn-stack = "0.8.3"
 reborrow = "0.5.1"
 openmp-sys = "1.2.3"
+rayon = "1.6.1"
+affinity = "0.1.2"
 
 [build-dependencies]
 cc = "1.0.77"
