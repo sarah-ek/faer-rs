@@ -126,7 +126,7 @@ fn main() -> Result<()> {
         })
         .build()?;
 
-    let input_sizes = vec![1024];
+    let input_sizes = vec![32, 64, 96, 128, 192, 256, 384, 512, 640, 768, 896, 1024];
 
     println!(
         "
