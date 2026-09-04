@@ -1624,6 +1624,7 @@ mod tests {
 	}
 }
 
+// tests by @sjoelund
 #[cfg(test)]
 mod t {
 	use faer::dyn_stack::{MemBuffer, MemStack};
@@ -1730,7 +1731,7 @@ mod t {
 	/// `qz_real::hessenberg_to_qz`.
 	#[test]
 	fn eigenvalues_only_gives_wrong_complex_pairs() {
-		let (mut bad_novec, mut bad_vec, mut total) = (0, 0, 0);
+		let (mut bad_novec, mut bad_vec) = (0, 0);
 		for n in [3usize, 4, 5, 6, 8, 10, 12] {
 			for seed in 0..40u64 {
 				let a = mk(n, seed * 7919 + n as u64);
@@ -1755,22 +1756,20 @@ mod t {
 						}
 					}
 				}
-				total +=
-					gevd(&a, &b, false).iter().filter(|l| l.1 != 0.0).count();
 			}
 		}
 		assert_eq!(bad_novec, 0, "eigenvalues-only path is wrong");
+		assert_eq!(bad_vec, 0, "eigenvalues-only path is wrong");
 	}
 
 	/// BUG 2: `gevd_scratch` under-allocates, so `gevd_real` panics inside
 	/// `temp_mat_zeroed`. n = 2 with eigenvectors requested.
 	#[test]
 	fn gevd_scratch_is_too_small_for_n2() {
-		let (mut panics, mut total) = (0, 0);
+		let mut panics = 0;
 		for seed in 0..40u64 {
 			let a = mk(2, seed * 7919 + 2);
 			let b = mk(2, seed * 7919 + 2 + 5000);
-			total += 1;
 			if std::panic::catch_unwind(|| gevd(&a, &b, true)).is_err() {
 				panics += 1;
 			}
