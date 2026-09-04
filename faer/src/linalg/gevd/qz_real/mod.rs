@@ -1111,6 +1111,20 @@ fn hessenberg_to_qz_unblocked<T: RealField>(
 		alphai[j] = zero();
 		beta[j] = T[(j, j)].copy();
 	}
+
+	// fix up eigenvalue pairs
+	let mut j = ilo;
+	while j <= ihi {
+		if alphai[j] == zero() {
+			j += 1;
+		} else {
+			alphar[j + 1] = alphar[j].copy();
+			alphai[j + 1] = -&alphai[j];
+			beta[j + 1] = beta[j].copy();
+
+			j += 2;
+		}
+	}
 }
 fn double_shift_sweep<T: RealField>(
 	ascale: T,

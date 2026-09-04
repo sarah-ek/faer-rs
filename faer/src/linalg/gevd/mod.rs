@@ -1259,6 +1259,34 @@ fn qz_to_gevd_cplx<T: ComplexField>(
 		}
 	}
 }
+
+fn qz_to_gevd_real_scratch<T: RealField>(n: usize, _: Par) -> StackReq {
+	StackReq::all_of(&[
+		temp_mat_scratch::<T>(n, 1),
+		temp_mat_scratch::<T>(n, 1),
+		temp_mat_scratch::<T>(n, 2),
+		temp_mat_scratch::<T>(2, 2),
+		temp_mat_scratch::<T>(2, 2),
+		StackReq::all_of(&[
+			temp_mat_scratch::<T>(2, 2),
+			temp_mat_scratch::<T>(n, 1),
+			linalg::lu::full_pivoting::factor::lu_in_place_scratch::<
+				usize,
+				Complex<T>,
+			>(2, 2, Par::Seq, Default::default()),
+			linalg::lu::full_pivoting::solve::solve_in_place_scratch::<
+				usize,
+				Complex<T>,
+			>(2, 1, Par::Seq),
+		]),
+		temp_mat_scratch::<T>(n, 2),
+	])
+}
+
+fn qz_to_gevd_cplx_scratch<T: ComplexField>(n: usize, _: Par) -> StackReq {
+	StackReq::all_of(&[temp_mat_scratch::<T>(n, 1); 4])
+}
+
 /// computes the layout of the workspace required to compute a matrix pair's
 /// generalized eigendecomposition
 pub fn gevd_scratch<T: ComplexField>(
@@ -1282,6 +1310,11 @@ pub fn gevd_scratch<T: ComplexField>(
 			qz_real::hessenberg_to_qz_scratch::<T::Real>(n, par, params.schur)
 		} else {
 			qz_cplx::hessenberg_to_qz_scratch::<T>(n, par, params.schur)
+		},
+		if const { T::IS_REAL } {
+			qz_to_gevd_real_scratch::<T::Real>(n, par)
+		} else {
+			qz_to_gevd_cplx_scratch::<T>(n, par)
 		},
 	])
 }
@@ -1588,5 +1621,160 @@ mod tests {
 				}
 			}
 		}
+	}
+}
+
+#[cfg(test)]
+mod t {
+	use faer::dyn_stack::{MemBuffer, MemStack};
+	use faer::linalg::evd::ComputeEigenvectors as CE;
+	use faer::prelude::*;
+	use faer::{Par, Spec, linalg};
+
+	fn mk(n: usize, seed: u64) -> Mat<f64> {
+		let mut s = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+		let mut next = move || {
+			s = s
+				.wrapping_mul(6364136223846793005)
+				.wrapping_add(1442695040888963407);
+			((s >> 33) as f64 / (1u64 << 31) as f64) - 1.0
+		};
+		Mat::from_fn(n, n, |i, j| next() + if i == j { n as f64 } else { 0.0 })
+	}
+
+	/// `gevd_real`, with the right-eigenvector flag as a parameter.
+	fn gevd(a: &Mat<f64>, b: &Mat<f64>, vectors: bool) -> Vec<(f64, f64)> {
+		let n = a.nrows();
+		let (mut am, mut bm) = (a.clone(), b.clone());
+		let mut sre = faer::diag::Diag::<f64>::zeros(n);
+		let mut sim = faer::diag::Diag::<f64>::zeros(n);
+		let mut bet = faer::diag::Diag::<f64>::zeros(n);
+		let mut u = Mat::<f64>::zeros(n, n);
+		let ce = if vectors { CE::Yes } else { CE::No };
+		let mut mem = MemBuffer::new(linalg::gevd::gevd_scratch::<f64>(
+			n,
+			CE::No,
+			ce,
+			Par::Seq,
+			Spec::default(),
+		));
+		linalg::gevd::gevd_real(
+			am.as_mut(),
+			bm.as_mut(),
+			sre.as_mut(),
+			sim.as_mut(),
+			bet.as_mut(),
+			None,
+			vectors.then(|| u.as_mut()),
+			Par::Seq,
+			MemStack::new(&mut mem),
+			Spec::default(),
+		)
+		.unwrap();
+		(0..n).map(|k| (sre[k] / bet[k], sim[k] / bet[k])).collect()
+	}
+
+	/// |det(A - lambda B)|, zero exactly at an eigenvalue.
+	fn residual(a: &Mat<f64>, b: &Mat<f64>, lam: (f64, f64)) -> f64 {
+		let n = a.nrows();
+		let mut m: Vec<(f64, f64)> = (0..n * n)
+			.map(|k| {
+				let (i, j) = (k % n, k / n);
+				(a[(i, j)] - lam.0 * b[(i, j)], -lam.1 * b[(i, j)])
+			})
+			.collect();
+		let mut det = (1.0f64, 0.0f64);
+		for col in 0..n {
+			let p = (col..n)
+				.max_by(|&x, &y| {
+					let f = |r: usize| m[r + col * n].0.hypot(m[r + col * n].1);
+					f(x).partial_cmp(&f(y)).unwrap()
+				})
+				.unwrap();
+			if p != col {
+				for j in 0..n {
+					m.swap(col + j * n, p + j * n);
+				}
+				det = (-det.0, -det.1);
+			}
+			let d = m[col + col * n];
+			det = (det.0 * d.0 - det.1 * d.1, det.0 * d.1 + det.1 * d.0);
+			let dn = d.0 * d.0 + d.1 * d.1;
+			if dn == 0.0 {
+				continue;
+			}
+			for r in col + 1..n {
+				let x = m[r + col * n];
+				let f = (
+					(x.0 * d.0 + x.1 * d.1) / dn,
+					(x.1 * d.0 - x.0 * d.1) / dn,
+				);
+				for j in col..n {
+					let y = m[col + j * n];
+					m[r + j * n].0 -= f.0 * y.0 - f.1 * y.1;
+					m[r + j * n].1 -= f.0 * y.1 + f.1 * y.0;
+				}
+			}
+		}
+		det.0.hypot(det.1)
+	}
+
+	/// ISSUE 1 (documentation): `gevd_real` writes a complex conjugate pair's
+	/// eigenvalue into the FIRST slot only. The second slot holds the 2x2
+	/// block's other diagonal entry, which is not an eigenvalue -- reading it
+	/// gives a value whose `det(A - lambda B)` is O(1e-2) rather than O(1e-16).
+	///
+	/// faer's own `Solvers` layer never reads it: `solvers.rs::real_to_cplx`
+	/// builds `S[j + 1]` from `S_re[j]`, not `S_re[j + 1]`. Nothing on
+	/// `gevd_real` says so, and the same applies to
+	/// `qz_real::hessenberg_to_qz`.
+	#[test]
+	fn eigenvalues_only_gives_wrong_complex_pairs() {
+		let (mut bad_novec, mut bad_vec, mut total) = (0, 0, 0);
+		for n in [3usize, 4, 5, 6, 8, 10, 12] {
+			for seed in 0..40u64 {
+				let a = mk(n, seed * 7919 + n as u64);
+				let b = mk(n, seed * 7919 + n as u64 + 5000);
+				let scale = (0..n * n)
+					.map(|k| a[(k % n, k / n)].abs())
+					.fold(1.0f64, f64::max);
+				let tol = 1e-9 * scale.powi(n as i32);
+				for (lams, vectors) in
+					[(gevd(&a, &b, false), false), (gevd(&a, &b, true), true)]
+				{
+					for &l in &lams {
+						if l.1 == 0.0 {
+							continue;
+						}
+						if residual(&a, &b, l) > tol {
+							if vectors {
+								bad_vec += 1
+							} else {
+								bad_novec += 1
+							}
+						}
+					}
+				}
+				total +=
+					gevd(&a, &b, false).iter().filter(|l| l.1 != 0.0).count();
+			}
+		}
+		assert_eq!(bad_novec, 0, "eigenvalues-only path is wrong");
+	}
+
+	/// BUG 2: `gevd_scratch` under-allocates, so `gevd_real` panics inside
+	/// `temp_mat_zeroed`. n = 2 with eigenvectors requested.
+	#[test]
+	fn gevd_scratch_is_too_small_for_n2() {
+		let (mut panics, mut total) = (0, 0);
+		for seed in 0..40u64 {
+			let a = mk(2, seed * 7919 + 2);
+			let b = mk(2, seed * 7919 + 2 + 5000);
+			total += 1;
+			if std::panic::catch_unwind(|| gevd(&a, &b, true)).is_err() {
+				panics += 1;
+			}
+		}
+		assert_eq!(panics, 0, "gevd_scratch under-allocates");
 	}
 }
